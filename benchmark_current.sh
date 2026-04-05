@@ -247,6 +247,28 @@ DATASET_SIZE=$(docker exec "${CONTAINER}" bash -lc "wc -c < '${DATASET_PATH}'" 2
 print_ok "Dataset ready: ${DATASET_PATH} (${DATASET_SIZE} bytes)"
 echo ""
 
+echo -e "${CYAN}▶${NC} Detecting model configuration..."
+
+MODEL_ALIAS=$(curl -sf "${API_URL}/v1/models" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null || echo "unknown")
+
+REAL_MODEL_PATH=$(docker exec "${CONTAINER}" ps aux | grep "vllm serve" | grep -v grep | perl -ne 'print $1 if /--model\s+([^\s]+)/' | head -1)
+
+if [ -z "$REAL_MODEL_PATH" ]; then
+    REAL_MODEL_PATH=$(docker exec "${CONTAINER}" ps aux | grep "vllm serve" | grep -v grep | awk '{for(i=1;i<=NF;i++) if($i=="serve") print $(i+1)}' | head -1)
+fi
+
+if [ "$MODEL_ALIAS" = "unknown" ] || [ -z "$REAL_MODEL_PATH" ]; then
+    print_fail "Could not detect model alias or real path."
+    echo "  Alias: $MODEL_ALIAS"
+    echo "  Real Path: $REAL_MODEL_PATH"
+    exit 1
+fi
+
+print_ok "API Alias: ${MODEL_ALIAS}"
+print_ok "Real Path: ${REAL_MODEL_PATH}"
+echo ""
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Run benchmark
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -281,7 +303,8 @@ echo ""
 
 BENCH_CMD="vllm bench serve \
   --backend vllm \
-  --model '${MODEL}' \
+  --model '${MODEL_ALIAS}' \
+  --tokenizer '${REAL_MODEL_PATH}' \
   --endpoint /v1/completions \
   --dataset-name sharegpt \
   --dataset-path '${DATASET_PATH}' \
@@ -295,7 +318,8 @@ BENCH_CMD="vllm bench serve \
 echo -e "  ${BLUE}Command:${NC}"
 echo "    vllm bench serve \\"
 echo "      --backend vllm \\"
-echo "      --model '${MODEL}' \\"
+echo "      --model '${MODEL_ALIAS}' \\"
+echo "      --tokenizer '${REAL_MODEL_PATH}' \\"
 echo "      --endpoint /v1/completions \\"
 echo "      --dataset-name sharegpt \\"
 echo "      --dataset-path '${DATASET_PATH}' \\"
