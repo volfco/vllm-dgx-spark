@@ -10,8 +10,8 @@ set -euo pipefail
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Configuration
-IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}"
-RAY_VERSION="${RAY_VERSION:-2.52.1}"
+IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:26.03-py3}"
+RAY_VERSION="${RAY_VERSION:-2.54.0}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
 
@@ -276,7 +276,7 @@ log "Step 6/8: Verifying container dependencies"
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${WORKER_NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.03-py3"
 fi
 log "  ✅ PyTorch CUDA available"
 

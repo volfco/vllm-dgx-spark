@@ -18,11 +18,11 @@ elif [ -f "${SCRIPT_DIR}/config.env" ]; then
 fi
 
 # Configuration (can be overridden by config.env or environment)
-IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}}"
+IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:26.03-py3}}"
 NAME="${HEAD_CONTAINER_NAME:-${NAME:-ray-head}}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"
-RAY_VERSION="${RAY_VERSION:-2.52.1}"
+RAY_VERSION="${RAY_VERSION:-2.54.0}"
 
 # Worker node configuration (for orchestrated setup)
 # WORKER_HOST: Ethernet IP for SSH access (e.g., 192.168.7.111)
@@ -311,7 +311,7 @@ fi
 # Check 4: NVIDIA GPU access
 echo ""
 echo "Checking NVIDIA GPU access..."
-if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+if docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
   echo "  ✅ NVIDIA GPU access via Docker is working"
 else
   echo "  ❌ Cannot access NVIDIA GPUs via Docker"
@@ -606,7 +606,7 @@ log "Step 5/${TOTAL_STEPS}: Verifying container dependencies"
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.03-py3"
 fi
 log "  ✅ PyTorch CUDA available"
 
@@ -738,29 +738,34 @@ if [ -n "${WORKER_HOST}" ]; then
 else
   RAY_STEP=7
 fi
-log "Step ${RAY_STEP}/${TOTAL_STEPS}: Starting Ray head"
-docker exec "${NAME}" bash -lc "
-  ray stop --force 2>/dev/null || true
-  ray start --head \
-    --node-ip-address=${HEAD_IP} \
-    --port=${RAY_PORT} \
-    --dashboard-host=0.0.0.0 \
-    --dashboard-port=${RAY_DASHBOARD_PORT}
-" >/dev/null
+if [ "${SINGLE_NODE_MODE}" = "true" ]; then
+  log "Step ${RAY_STEP}/${TOTAL_STEPS}: Skipping Ray (single-node mode, not required)"
+  log "  ℹ️  vLLM will run directly without Ray for TP=${TENSOR_PARALLEL}"
+else
+  log "Step ${RAY_STEP}/${TOTAL_STEPS}: Starting Ray head"
+  docker exec "${NAME}" bash -lc "
+    ray stop --force 2>/dev/null || true
+    ray start --head \
+      --node-ip-address=${HEAD_IP} \
+      --port=${RAY_PORT} \
+      --dashboard-host=0.0.0.0 \
+      --dashboard-port=${RAY_DASHBOARD_PORT}
+  " >/dev/null
 
-log "  Ray head started, waiting for readiness..."
+  log "  Ray head started, waiting for readiness..."
 
-# Wait for Ray to become ready
-for i in {1..30}; do
-  if docker exec "${NAME}" bash -lc "ray status --address='127.0.0.1:${RAY_PORT}' >/dev/null 2>&1"; then
-    log "  ✅ Ray head is ready (${i}s)"
-    break
-  fi
-  if [ $i -eq 30 ]; then
-    error "Ray head failed to become ready after 30 seconds"
-  fi
-  sleep 1
-done
+  # Wait for Ray to become ready
+  for i in {1..30}; do
+    if docker exec "${NAME}" bash -lc "ray status --address='127.0.0.1:${RAY_PORT}' >/dev/null 2>&1"; then
+      log "  ✅ Ray head is ready (${i}s)"
+      break
+    fi
+    if [ $i -eq 30 ]; then
+      error "Ray head failed to become ready after 30 seconds"
+    fi
+    sleep 1
+  done
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -876,8 +881,10 @@ docker exec "${NAME}" bash -lc "pkill -f 'vllm serve' 2>/dev/null || true" || tr
 log "  Starting vLLM in background (this launches the server process)..."
 
 # Build vLLM command arguments
-VLLM_ARGS="--distributed-executor-backend ray"
-VLLM_ARGS="${VLLM_ARGS} --host 0.0.0.0"
+VLLM_ARGS="--host 0.0.0.0"
+if [ "${SINGLE_NODE_MODE}" != "true" ]; then
+  VLLM_ARGS="--distributed-executor-backend ray ${VLLM_ARGS}"
+fi
 VLLM_ARGS="${VLLM_ARGS} --port ${VLLM_PORT}"
 VLLM_ARGS="${VLLM_ARGS} --tensor-parallel-size ${TENSOR_PARALLEL}"
 VLLM_ARGS="${VLLM_ARGS} --max-model-len ${MAX_MODEL_LEN}"
@@ -901,7 +908,7 @@ fi
 # Note: We do NOT set HF_HUB_OFFLINE=1 here because workers need to resolve the model name
 docker exec "${NAME}" bash -lc "
   export HF_HOME=/root/.cache/huggingface
-  export RAY_ADDRESS=127.0.0.1:${RAY_PORT}
+  $([ "${SINGLE_NODE_MODE}" != "true" ] && echo "export RAY_ADDRESS=127.0.0.1:${RAY_PORT}")
   export PYTHONUNBUFFERED=1
   export VLLM_LOGGING_LEVEL=INFO
   export VLLM_MXFP4_USE_MARLIN=1
