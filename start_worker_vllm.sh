@@ -243,6 +243,7 @@ docker run -d \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e RAY_memory_usage_threshold=0.995 \
+  -e VLLM_RPC_TIMEOUT="${VLLM_RPC_TIMEOUT:-1800}" \
   -e HF_HOME=/root/.cache/huggingface \
   ${HF_TOKEN_ENV} \
   "${IMAGE}" sleep infinity
