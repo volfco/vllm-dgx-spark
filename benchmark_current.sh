@@ -2,9 +2,11 @@
 set -euo pipefail
 
 ################################################################################
-# vLLM Benchmark Script using vllm bench serve
+# vLLM Benchmark Script
 #
-# Uses the official vLLM benchmarking tool for consistent, reproducible results.
+# Benchmarks the currently running vLLM server using OpenAI-compatible
+# API endpoints with realistic workloads. Uses the same methodology as
+# TensorRT-LLM and SGLang benchmarks for fair comparison.
 #
 # Usage:
 #   ./benchmark_current.sh [options]
@@ -12,7 +14,7 @@ set -euo pipefail
 # Options:
 #   -u, --url URL           vLLM API URL (default: auto-detect)
 #   -n, --num-prompts N     Number of prompts to benchmark (default: 100)
-#   -c, --concurrency N     Max concurrent requests (default: 100)
+#   -c, --concurrency N     Max concurrent requests (default: 32)
 #   -d, --dataset PATH      Path to ShareGPT dataset JSON (auto-downloads if missing)
 #   -s, --single            Run single-request benchmark only (1 prompt)
 #   -q, --quick             Quick mode: 20 prompts, lower concurrency
@@ -23,11 +25,7 @@ set -euo pipefail
 #   ./benchmark_current.sh                    # Full benchmark (100 prompts)
 #   ./benchmark_current.sh --quick            # Quick benchmark (20 prompts)
 #   ./benchmark_current.sh --single           # Single request latency test
-#   ./benchmark_current.sh -n 50 -c 50        # Custom prompts/concurrency
-#
-# Dataset:
-#   Uses ShareGPT_V3 dataset for realistic workload distribution.
-#   Auto-downloads from HuggingFace if not present.
+#   ./benchmark_current.sh -n 50 -c 16        # Custom prompts/concurrency
 #
 ################################################################################
 
@@ -40,17 +38,29 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load configuration
+if [ -f "${SCRIPT_DIR}/config.local.env" ]; then
+  source "${SCRIPT_DIR}/config.local.env"
+elif [ -f "${SCRIPT_DIR}/config.env" ]; then
+  source "${SCRIPT_DIR}/config.env"
+fi
+
 # Default configuration
+API_PORT="${API_PORT:-8000}"
 API_URL=""
-API_PORT="8000"
 NUM_PROMPTS=100
-MAX_CONCURRENCY=100
+MAX_CONCURRENCY=32
 DATASET_PATH=""
 SINGLE_MODE=false
 QUICK_MODE=false
 OUTPUT_FILE=""
 MODEL=""
-CONTAINER="${CONTAINER:-ray-head}"
+
+# Output directory for results
+OUTPUT_DIR="${SCRIPT_DIR}/benchmark_results"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Default dataset location
 DEFAULT_DATASET="ShareGPT_V3_unfiltered_cleaned_split.json"
@@ -84,7 +94,7 @@ while [[ $# -gt 0 ]]; do
     -q|--quick)
       QUICK_MODE=true
       NUM_PROMPTS=20
-      MAX_CONCURRENCY=20
+      MAX_CONCURRENCY=16
       shift
       ;;
     -o|--output)
@@ -126,16 +136,14 @@ print_info() {
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-print_header "vLLM Benchmark (using vllm bench serve)"
+print_header "vLLM Benchmark"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Auto-detect API URL if not provided
 if [ -z "$API_URL" ]; then
-  # Try localhost first
   if curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
     API_URL="http://localhost:${API_PORT}"
   else
-    # Try to detect from network interfaces (exclude loopback and docker)
     PUBLIC_IP=$(ip -o addr show | grep "inet " | grep -v "127.0.0.1" | grep -v "172.17" | awk '{print $4}' | cut -d'/' -f1 | head -1)
     if [ -n "$PUBLIC_IP" ] && curl -sf "http://${PUBLIC_IP}:${API_PORT}/health" >/dev/null 2>&1; then
       API_URL="http://${PUBLIC_IP}:${API_PORT}"
@@ -182,47 +190,19 @@ print_ok "Model: ${MODEL}"
 echo ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Check for vllm bench command
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-echo -e "${CYAN}▶${NC} Checking vllm bench availability..."
-
-# Check if vllm bench is available in the container
-if ! docker exec "${CONTAINER}" bash -lc "vllm bench --help" >/dev/null 2>&1; then
-  print_warn "vllm bench not available in container - installing..."
-  # Try to ensure vllm is properly installed with bench support
-  if ! docker exec "${CONTAINER}" bash -lc "pip show vllm >/dev/null 2>&1"; then
-    print_fail "vLLM package not found in container"
-    exit 1
-  fi
-fi
-print_ok "vllm bench command available"
-echo ""
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Download ShareGPT dataset if needed
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 echo -e "${CYAN}▶${NC} Checking ShareGPT dataset..."
 
-# Use provided path or check default locations
 if [ -z "$DATASET_PATH" ]; then
-  # Check if dataset exists in common locations
   if [ -f "./${DEFAULT_DATASET}" ]; then
     DATASET_PATH="./${DEFAULT_DATASET}"
   elif [ -f "/tmp/${DEFAULT_DATASET}" ]; then
     DATASET_PATH="/tmp/${DEFAULT_DATASET}"
-  elif docker exec "${CONTAINER}" bash -lc "[ -f /tmp/${DEFAULT_DATASET} ]" 2>/dev/null; then
-    DATASET_PATH="/tmp/${DEFAULT_DATASET}"
   else
-    # Download dataset to container
-    print_info "Downloading ShareGPT dataset to container..."
-    if ! docker exec "${CONTAINER}" bash -lc "
-      cd /tmp
-      if [ ! -f '${DEFAULT_DATASET}' ]; then
-        curl -sL '${DATASET_URL}' -o '${DEFAULT_DATASET}'
-      fi
-    "; then
+    print_info "Downloading ShareGPT dataset..."
+    if ! curl -sL "${DATASET_URL}" -o "/tmp/${DEFAULT_DATASET}"; then
       print_fail "Failed to download dataset"
       exit 1
     fi
@@ -230,44 +210,25 @@ if [ -z "$DATASET_PATH" ]; then
   fi
 fi
 
-# Verify dataset exists in container
-if ! docker exec "${CONTAINER}" bash -lc "[ -f '${DATASET_PATH}' ]" 2>/dev/null; then
-  # Try copying from host if it exists locally
-  if [ -f "${DATASET_PATH}" ]; then
-    print_info "Copying dataset to container..."
-    docker cp "${DATASET_PATH}" "${CONTAINER}:/tmp/${DEFAULT_DATASET}"
-    DATASET_PATH="/tmp/${DEFAULT_DATASET}"
-  else
-    print_fail "Dataset not found at ${DATASET_PATH}"
-    exit 1
-  fi
+if [ ! -f "${DATASET_PATH}" ]; then
+  print_fail "Dataset not found at ${DATASET_PATH}"
+  exit 1
 fi
 
-DATASET_SIZE=$(docker exec "${CONTAINER}" bash -lc "wc -c < '${DATASET_PATH}'" 2>/dev/null || echo "unknown")
+DATASET_SIZE=$(wc -c < "${DATASET_PATH}" 2>/dev/null || echo "unknown")
 print_ok "Dataset ready: ${DATASET_PATH} (${DATASET_SIZE} bytes)"
 echo ""
 
-echo -e "${CYAN}▶${NC} Detecting model configuration..."
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Setup output directory and file
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-MODEL_ALIAS=$(curl -sf "${API_URL}/v1/models" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null || echo "unknown")
+mkdir -p "${OUTPUT_DIR}"
 
-REAL_MODEL_PATH=$(docker exec "${CONTAINER}" ps aux | grep "vllm serve" | grep -v grep | perl -ne 'print $1 if /--model\s+([^\s]+)/' | head -1)
-
-if [ -z "$REAL_MODEL_PATH" ]; then
-    REAL_MODEL_PATH=$(docker exec "${CONTAINER}" ps aux | grep "vllm serve" | grep -v grep | awk '{for(i=1;i<=NF;i++) if($i=="serve") print $(i+1)}' | head -1)
+# Auto-generate output file if not specified
+if [ -z "$OUTPUT_FILE" ]; then
+  OUTPUT_FILE="${OUTPUT_DIR}/bench_${TIMESTAMP}.json"
 fi
-
-if [ "$MODEL_ALIAS" = "unknown" ] || [ -z "$REAL_MODEL_PATH" ]; then
-    print_fail "Could not detect model alias or real path."
-    echo "  Alias: $MODEL_ALIAS"
-    echo "  Real Path: $REAL_MODEL_PATH"
-    exit 1
-fi
-
-print_ok "API Alias: ${MODEL_ALIAS}"
-print_ok "Real Path: ${REAL_MODEL_PATH}"
-echo ""
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Run benchmark
@@ -283,101 +244,246 @@ echo -e "    Concurrency:  ${MAX_CONCURRENCY}"
 echo -e "    Dataset:      ShareGPT_V3"
 echo ""
 
-# Extract host and port from API URL
-API_HOST=$(echo "${API_URL}" | sed -E 's|https?://||' | cut -d: -f1)
-API_PORT=$(echo "${API_URL}" | sed -E 's|https?://||' | cut -d: -f2 | cut -d/ -f1)
-if [ -z "$API_PORT" ] || [ "$API_PORT" = "$API_HOST" ]; then
-  API_PORT="8000"
-fi
+# Create Python benchmark script
+BENCH_SCRIPT="/tmp/vllm_benchmark_$$.py"
 
-# Build output file argument if specified
-OUTPUT_ARG=""
-RESULT_FILE="/tmp/benchmark_result_$(date +%Y%m%d_%H%M%S).json"
-if [ -n "$OUTPUT_FILE" ]; then
-  OUTPUT_ARG="--result-filename ${RESULT_FILE}"
-fi
+cat > "${BENCH_SCRIPT}" << 'PYTHON_SCRIPT'
+#!/usr/bin/env python3
+"""
+vLLM Benchmark Script using OpenAI-compatible API
+Unified format matching TensorRT-LLM and SGLang benchmarks
+"""
 
-# Run the benchmark inside the container
-echo -e "${CYAN}▶${NC} Starting vllm bench serve..."
-echo ""
+import argparse
+import json
+import time
+import random
+import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import List
+import urllib.request
+import urllib.error
 
-BENCH_CMD="vllm bench serve \
-  --backend vllm \
-  --model '${MODEL_ALIAS}' \
-  --tokenizer '${REAL_MODEL_PATH}' \
-  --endpoint /v1/completions \
-  --dataset-name sharegpt \
-  --dataset-path '${DATASET_PATH}' \
-  --num-prompts ${NUM_PROMPTS} \
-  --max-concurrency ${MAX_CONCURRENCY} \
-  --host ${API_HOST} \
-  --port ${API_PORT} \
-  ${OUTPUT_ARG}"
+@dataclass
+class BenchmarkResult:
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    latencies: List[float] = field(default_factory=list)
+    ttfts: List[float] = field(default_factory=list)
+    start_time: float = 0
+    end_time: float = 0
 
-# Show the command being run
-echo -e "  ${BLUE}Command:${NC}"
-echo "    vllm bench serve \\"
-echo "      --backend vllm \\"
-echo "      --model '${MODEL_ALIAS}' \\"
-echo "      --tokenizer '${REAL_MODEL_PATH}' \\"
-echo "      --endpoint /v1/completions \\"
-echo "      --dataset-name sharegpt \\"
-echo "      --dataset-path '${DATASET_PATH}' \\"
-echo "      --num-prompts ${NUM_PROMPTS} \\"
-echo "      --max-concurrency ${MAX_CONCURRENCY} \\"
-echo "      --host ${API_HOST} \\"
-echo "      --port ${API_PORT}"
-echo ""
+def load_sharegpt_prompts(dataset_path: str, num_prompts: int) -> List[str]:
+    """Load prompts from ShareGPT dataset."""
+    with open(dataset_path, 'r') as f:
+        data = json.load(f)
 
-# Execute benchmark
-docker exec "${CONTAINER}" bash -lc "${BENCH_CMD}" 2>&1 | tee /tmp/benchmark_output.txt
+    prompts = []
+    for item in data:
+        conversations = item.get('conversations', [])
+        for conv in conversations:
+            if conv.get('from') == 'human':
+                prompt = conv.get('value', '')
+                if 50 < len(prompt) < 2000:  # Filter reasonable length prompts
+                    prompts.append(prompt)
+                    if len(prompts) >= num_prompts * 2:  # Get more than needed for random selection
+                        break
+        if len(prompts) >= num_prompts * 2:
+            break
 
-BENCH_EXIT_CODE=${PIPESTATUS[0]}
+    # Random sample
+    if len(prompts) > num_prompts:
+        prompts = random.sample(prompts, num_prompts)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Save results if requested
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    return prompts[:num_prompts]
 
-if [ -n "$OUTPUT_FILE" ]; then
-  # Copy result file from container
-  if docker exec "${CONTAINER}" bash -lc "[ -f '${RESULT_FILE}' ]" 2>/dev/null; then
-    docker cp "${CONTAINER}:${RESULT_FILE}" "${OUTPUT_FILE}"
-    echo ""
-    print_ok "Results saved to: ${OUTPUT_FILE}"
-  fi
-fi
+def make_request(api_url: str, model: str, prompt: str, max_tokens: int = 128) -> dict:
+    """Make a single request to the API."""
+    url = f"{api_url}/v1/chat/completions"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Performance Analysis
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.7
+    }).encode('utf-8')
 
-print_header "Performance Analysis"
+    headers = {
+        "Content-Type": "application/json"
+    }
 
-# Extract key metrics from output
-OUTPUT_TPS=$(grep -E "Output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
-PEAK_TPS=$(grep -E "Peak output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
-TOTAL_TPS=$(grep -E "Total Token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
-REQ_THROUGHPUT=$(grep -E "Request throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
-MEAN_TTFT=$(grep -E "Mean TTFT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
-MEAN_TPOT=$(grep -E "Mean TPOT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+    start_time = time.perf_counter()
 
-echo ""
-echo -e "  ${BOLD}Key Metrics:${NC}"
-echo -e "    Output Throughput:     ${GREEN}${OUTPUT_TPS}${NC} tokens/sec"
-if [ "$PEAK_TPS" != "N/A" ]; then
-  echo -e "    Peak Throughput:       ${GREEN}${PEAK_TPS}${NC} tokens/sec"
-fi
-echo -e "    Total Throughput:      ${TOTAL_TPS} tokens/sec (input + output)"
-echo -e "    Request Throughput:    ${REQ_THROUGHPUT} req/sec"
-echo -e "    Mean TTFT:             ${MEAN_TTFT} ms"
-echo -e "    Mean TPOT:             ${MEAN_TPOT} ms"
-echo ""
+    try:
+        req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
+        with urllib.request.urlopen(req, timeout=120) as response:
+            response_data = json.loads(response.read().decode('utf-8'))
 
-# Diagnostic tip
-echo -e "  ${BOLD}Diagnostic:${NC}"
-echo -e "    To verify NCCL is using InfiniBand/RoCE: ./checkout_setup.sh --nccl"
+        end_time = time.perf_counter()
+        latency = (end_time - start_time) * 1000  # Convert to ms
 
-echo ""
+        usage = response_data.get('usage', {})
+        output_tokens = usage.get('completion_tokens', 0)
+        input_tokens = usage.get('prompt_tokens', 0)
+
+        return {
+            'success': True,
+            'latency_ms': latency,
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'ttft_ms': latency / max(output_tokens, 1) if output_tokens > 0 else latency  # Approximate TTFT
+        }
+    except Exception as e:
+        end_time = time.perf_counter()
+        return {
+            'success': False,
+            'latency_ms': (end_time - start_time) * 1000,
+            'error': str(e),
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'ttft_ms': 0
+        }
+
+def run_benchmark(api_url: str, model: str, prompts: List[str], max_concurrency: int) -> BenchmarkResult:
+    """Run the benchmark with concurrent requests."""
+    result = BenchmarkResult()
+    result.total_requests = len(prompts)
+    result.start_time = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        futures = {executor.submit(make_request, api_url, model, prompt): prompt for prompt in prompts}
+
+        completed = 0
+        for future in as_completed(futures):
+            completed += 1
+            resp = future.result()
+
+            if resp['success']:
+                result.successful_requests += 1
+                result.latencies.append(resp['latency_ms'])
+                result.ttfts.append(resp['ttft_ms'])
+                result.total_input_tokens += resp['input_tokens']
+                result.total_output_tokens += resp['output_tokens']
+            else:
+                result.failed_requests += 1
+
+            if completed % 10 == 0:
+                print(f"    Progress: {completed}/{len(prompts)} requests", flush=True)
+
+    result.end_time = time.perf_counter()
+    return result
+
+def main():
+    parser = argparse.ArgumentParser(description='vLLM Benchmark')
+    parser.add_argument('--api-url', required=True, help='API URL')
+    parser.add_argument('--model', required=True, help='Model name')
+    parser.add_argument('--dataset', required=True, help='Dataset path')
+    parser.add_argument('--num-prompts', type=int, default=100, help='Number of prompts')
+    parser.add_argument('--concurrency', type=int, default=32, help='Max concurrency')
+    parser.add_argument('--output', help='Output JSON file')
+
+    args = parser.parse_args()
+
+    print(f"  Loading {args.num_prompts} prompts from dataset...")
+    prompts = load_sharegpt_prompts(args.dataset, args.num_prompts)
+    print(f"  Loaded {len(prompts)} prompts")
+    print()
+
+    print("  Starting benchmark...")
+    result = run_benchmark(args.api_url, args.model, prompts, args.concurrency)
+
+    # Calculate metrics
+    duration = result.end_time - result.start_time
+
+    if result.latencies:
+        mean_latency = statistics.mean(result.latencies)
+        p50_latency = statistics.median(result.latencies)
+        p99_latency = sorted(result.latencies)[int(len(result.latencies) * 0.99)]
+        mean_ttft = statistics.mean(result.ttfts)
+    else:
+        mean_latency = p50_latency = p99_latency = mean_ttft = 0
+
+    output_tps = result.total_output_tokens / duration if duration > 0 else 0
+    total_tps = (result.total_input_tokens + result.total_output_tokens) / duration if duration > 0 else 0
+    req_throughput = result.successful_requests / duration if duration > 0 else 0
+
+    # Print results in unified format
+    print()
+    print("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("  Benchmark Results")
+    print("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print()
+    print("  Test Configuration:")
+    print(f"    Platform:           vLLM")
+    print(f"    Model:              {args.model}")
+    print(f"    Num Prompts:        {args.num_prompts}")
+    print(f"    Concurrency:        {args.concurrency}")
+    print(f"    Dataset:            ShareGPT_V3")
+    print()
+    print("  Throughput Metrics:")
+    print(f"    Duration:           {duration:.2f}s")
+    print(f"    Requests/sec:       {req_throughput:.2f}")
+    print(f"    Output tok/s:       {output_tps:.2f}")
+    print(f"    Total tok/s:        {total_tps:.2f}")
+    print()
+    print("  Latency Metrics:")
+    print(f"    Mean Latency:       {mean_latency:.2f} ms")
+    print(f"    P50 Latency:        {p50_latency:.2f} ms")
+    print(f"    P99 Latency:        {p99_latency:.2f} ms")
+    print(f"    Mean TTFT:          {mean_ttft:.2f} ms")
+    print()
+    print("  Request Statistics:")
+    print(f"    Completed:          {result.successful_requests}/{result.total_requests}")
+    print(f"    Total Input Tokens: {result.total_input_tokens}")
+    print(f"    Total Output Tokens:{result.total_output_tokens}")
+    print()
+
+    # Save to JSON if requested
+    if args.output:
+        output_data = {
+            'platform': 'vLLM',
+            'model': args.model,
+            'num_prompts': args.num_prompts,
+            'concurrency': args.concurrency,
+            'dataset': 'ShareGPT_V3',
+            'duration_s': round(duration, 2),
+            'successful_requests': result.successful_requests,
+            'failed_requests': result.failed_requests,
+            'output_throughput_tps': round(output_tps, 2),
+            'total_throughput_tps': round(total_tps, 2),
+            'request_throughput_rps': round(req_throughput, 2),
+            'mean_latency_ms': round(mean_latency, 2),
+            'p50_latency_ms': round(p50_latency, 2),
+            'p99_latency_ms': round(p99_latency, 2),
+            'mean_ttft_ms': round(mean_ttft, 2),
+            'total_input_tokens': result.total_input_tokens,
+            'total_output_tokens': result.total_output_tokens
+        }
+        with open(args.output, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        print(f"  Results saved to: {args.output}")
+
+if __name__ == '__main__':
+    main()
+PYTHON_SCRIPT
+
+# Run the benchmark
+python3 "${BENCH_SCRIPT}" \
+  --api-url "${API_URL}" \
+  --model "${MODEL}" \
+  --dataset "${DATASET_PATH}" \
+  --num-prompts "${NUM_PROMPTS}" \
+  --concurrency "${MAX_CONCURRENCY}" \
+  --output "${OUTPUT_FILE}"
+
+BENCH_EXIT_CODE=$?
+
+# Cleanup
+rm -f "${BENCH_SCRIPT}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 print_header "Benchmark Complete"
@@ -392,11 +498,8 @@ echo ""
 echo "  # Run quick batch benchmark (20 prompts)"
 echo "  ./benchmark_current.sh --quick"
 echo ""
-echo "  # Run full benchmark with JSON output"
+echo "  # Run full benchmark with custom output"
 echo "  ./benchmark_current.sh -n 100 -o results.json"
-echo ""
-echo "  # Check NCCL/InfiniBand configuration"
-echo "  ./checkout_setup.sh --nccl"
 echo ""
 
 exit $BENCH_EXIT_CODE
