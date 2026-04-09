@@ -32,7 +32,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  Tensor Parallel (TP=1): Full model on single GPU              │
-│  Best for: Models up to ~80GB (Llama 70B, Qwen 72B, etc.)      │
+│  Best for: Models up to ~100GB (GPT-OSS 120B MXFP4, Llama 70B) │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,7 +54,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 │  └──────────────────────┘      └──────────────────────┘        │
 │                                                                 │
 │  Tensor Parallel (TP=2): Model split across both GPUs          │
-│  Best for: Large models (GPT-OSS 120B, etc.)                   │
+│  Best for: Models that exceed a single Spark's ~120GB VRAM     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,7 +170,7 @@ For running on a single DGX Spark with one GPU:
 export TENSOR_PARALLEL=1
 
 # Choose a model that fits in ~120GB VRAM
-export MODEL="meta-llama/Llama-3.1-70B-Instruct"  # or any model up to ~80GB
+export MODEL="openai/gpt-oss-120b"  # ~65GB in native MXFP4, or any model up to ~100GB
 
 # Start the server
 ./start_cluster.sh
@@ -375,7 +375,7 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 
 | # | Model | Size | Single-Node | Notes |
 |---|-------|------|-------------|-------|
-| 1 | `openai/gpt-oss-120b` | ~80GB+ | No | Default, MoE, requires TP=2 |
+| 1 | `openai/gpt-oss-120b` | ~65GB | Yes | Default, MoE, native MXFP4 |
 | 2 | `openai/gpt-oss-20b` | ~16-20GB | Yes | MoE, fast |
 | 3 | `Qwen/Qwen2.5-7B-Instruct` | ~7GB | Yes | Very fast |
 | 4 | `Qwen/Qwen2.5-14B-Instruct` | ~14GB | Yes | Fast |
@@ -388,9 +388,12 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 11 | `meta-llama/Llama-3.1-70B-Instruct` | ~65GB | Yes | High quality (needs HF token) |
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
+| 14 | `CohereForAI/c4ai-command-r-plus-08-2024` | ~208GB | No | BF16, 104B, requires 2 Sparks (needs HF token) |
+| 15 | `nvidia/Llama-3.1-405B-Instruct-FP4` | ~200GB | No | FP4 quantized 405B, requires 2 Sparks (needs HF token) |
+| 16 | `meta-llama/Llama-3.3-70B-Instruct` | ~141GB | No | BF16, requires 2 Sparks (needs HF token) |
 
-**Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
-**Dual-Node:** Required for GPT-OSS 120B and other very large models
+**Single-Node:** Models up to ~100GB fit on one DGX Spark (~120GB VRAM), including GPT-OSS 120B in its native MXFP4 format
+**Dual-Node:** Required for models that exceed a single Spark's VRAM — combined ~240GB across two Sparks supports models up to ~200GB (e.g., Command-R-Plus, FP4-quantized Llama 405B, BF16 Llama 3.3 70B)
 
 ## Benchmark Profiles
 
@@ -594,7 +597,9 @@ Use `checkout_setup.sh` for comprehensive system checks:
 
 ## Performance Notes
 
-### Expected Performance (GPT-OSS 120B on 2x DGX Spark)
+### Expected Performance (GPT-OSS 120B)
+
+Performance will vary based on single-node vs dual-node deployment, context length, and concurrency. The numbers below are rough guidance from dual-node runs:
 
 | Metric | Value |
 |--------|-------|

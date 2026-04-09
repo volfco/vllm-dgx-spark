@@ -38,11 +38,14 @@ MODELS=(
   "meta-llama/Llama-3.1-70B-Instruct"
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
+  "CohereForAI/c4ai-command-r-plus-08-2024"
+  "nvidia/Llama-3.1-405B-Instruct-FP4"
+  "meta-llama/Llama-3.3-70B-Instruct"
 )
 
 # Human-readable model descriptions
 MODEL_NAMES=(
-  "GPT-OSS-120B (120B params, MoE, ~80GB+, heavy, high quality)"
+  "GPT-OSS-120B (120B params, MoE, native MXFP4 ~65GB, high quality)"
   "GPT-OSS-20B (21B params, MoE, ~16-20GB, fast)"
   "Qwen2.5-7B (7B params, ~7GB, very fast)"
   "Qwen2.5-14B (14B params, ~14GB, fast)"
@@ -55,41 +58,51 @@ MODEL_NAMES=(
   "Llama-3.1-70B (70B params, ~65GB, high quality)"
   "Phi-4 (15B params, ~14-16GB, small but smart)"
   "Gemma2-27B (27B params, ~24-28GB, strong mid-size)"
+  "Command-R-Plus (104B params, BF16 ~208GB, requires 2 Sparks)"
+  "Llama-3.1-405B-FP4 (405B params, FP4 ~200GB, requires 2 Sparks)"
+  "Llama-3.3-70B (70B params, BF16 ~141GB, requires 2 Sparks)"
 )
 
 # Tensor Parallelism (number of GPUs needed)
-# All models use TP=2 to run across both nodes
+# Models that fit in a single DGX Spark's ~120GB VRAM use TP=1;
+# larger models that must be split across two Sparks use TP=2.
 MODEL_TP=(
-  2    # gpt-oss-120b
-  2    # gpt-oss-20b
-  2    # Qwen2.5-7B
-  2    # Qwen2.5-14B
-  2    # Qwen2.5-32B
-  2    # Qwen2.5-72B
-  2    # Mistral-7B
-  2    # Mistral-Nemo-12B
-  2    # Mixtral-8x7B
-  2    # Llama-3.1-8B
-  2    # Llama-3.1-70B
-  2    # Phi-4
-  2    # Gemma2-27B
+  1    # gpt-oss-120b - native MXFP4 ~65GB
+  1    # gpt-oss-20b - ~16-20GB
+  1    # Qwen2.5-7B - ~7GB
+  1    # Qwen2.5-14B - ~14GB
+  1    # Qwen2.5-32B - ~30GB
+  1    # Qwen2.5-72B - ~70GB
+  1    # Mistral-7B - ~7GB
+  1    # Mistral-Nemo-12B - ~12GB
+  1    # Mixtral-8x7B - ~45GB
+  1    # Llama-3.1-8B - ~8GB
+  1    # Llama-3.1-70B - ~65GB
+  1    # Phi-4 - ~14-16GB
+  1    # Gemma2-27B - ~24-28GB
+  2    # Command-R-Plus - BF16 ~208GB, needs 2 Sparks
+  2    # Llama-3.1-405B-FP4 - ~200GB, needs 2 Sparks
+  2    # Llama-3.3-70B - BF16 ~141GB, needs 2 Sparks
 )
 
-# Number of nodes required (all models use 2 nodes)
+# Number of nodes required (1 for models that fit on a single Spark, 2 otherwise)
 MODEL_NODES=(
-  2    # gpt-oss-120b
-  2    # gpt-oss-20b
-  2    # Qwen2.5-7B
-  2    # Qwen2.5-14B
-  2    # Qwen2.5-32B
-  2    # Qwen2.5-72B
-  2    # Mistral-7B
-  2    # Mistral-Nemo-12B
-  2    # Mixtral-8x7B
-  2    # Llama-3.1-8B
-  2    # Llama-3.1-70B
-  2    # Phi-4
-  2    # Gemma2-27B
+  1    # gpt-oss-120b
+  1    # gpt-oss-20b
+  1    # Qwen2.5-7B
+  1    # Qwen2.5-14B
+  1    # Qwen2.5-32B
+  1    # Qwen2.5-72B
+  1    # Mistral-7B
+  1    # Mistral-Nemo-12B
+  1    # Mixtral-8x7B
+  1    # Llama-3.1-8B
+  1    # Llama-3.1-70B
+  1    # Phi-4
+  1    # Gemma2-27B
+  2    # Command-R-Plus
+  2    # Llama-3.1-405B-FP4
+  2    # Llama-3.3-70B
 )
 
 # GPU Memory Utilization (0.90 default)
@@ -107,6 +120,9 @@ MODEL_GPU_MEM=(
   0.90  # Llama-3.1-70B
   0.90  # Phi-4
   0.90  # Gemma2-27B
+  0.90  # Command-R-Plus
+  0.90  # Llama-3.1-405B-FP4
+  0.90  # Llama-3.3-70B
 )
 
 # Max model length (context window)
@@ -124,6 +140,9 @@ MODEL_MAX_LEN=(
   131072 # Llama-3.1-70B - 128k context
   16384  # Phi-4
   8192   # Gemma2-27B
+  32768  # Command-R-Plus - supports 128k, limit for KV cache memory
+  16384  # Llama-3.1-405B-FP4 - very large, keep context modest
+  32768  # Llama-3.3-70B - supports 128k, limit for KV cache memory
 )
 
 # Trust remote code flag
@@ -141,6 +160,9 @@ MODEL_TRUST_REMOTE=(
   false  # Llama-3.1-70B
   true   # Phi-4 - requires trust_remote_code
   false  # Gemma2-27B
+  false  # Command-R-Plus
+  false  # Llama-3.1-405B-FP4
+  false  # Llama-3.3-70B
 )
 
 # Requires HF token (gated models)
@@ -158,6 +180,9 @@ MODEL_NEEDS_TOKEN=(
   true   # Llama-3.1-70B - gated
   false  # Phi-4
   true   # Gemma2-27B - gated
+  true   # Command-R-Plus - gated
+  true   # Llama-3.1-405B-FP4 - gated (Meta Llama license)
+  true   # Llama-3.3-70B - gated
 )
 
 # Enable expert parallel for MoE models
@@ -175,6 +200,9 @@ MODEL_EXPERT_PARALLEL=(
   false  # Llama-3.1-70B
   false  # Phi-4
   false  # Gemma2-27B
+  false  # Command-R-Plus
+  false  # Llama-3.1-405B-FP4
+  false  # Llama-3.3-70B
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

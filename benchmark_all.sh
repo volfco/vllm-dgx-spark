@@ -50,6 +50,9 @@ MODELS=(
   "meta-llama/Llama-3.1-70B-Instruct"
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
+  "CohereForAI/c4ai-command-r-plus-08-2024"
+  "nvidia/Llama-3.1-405B-Instruct-FP4"
+  "meta-llama/Llama-3.3-70B-Instruct"
 )
 
 MODEL_NAMES=(
@@ -66,15 +69,20 @@ MODEL_NAMES=(
   "Llama-3.1-70B"
   "Phi-4"
   "Gemma2-27B"
+  "Command-R-Plus"
+  "Llama-3.1-405B-FP4"
+  "Llama-3.3-70B"
 )
 
-# All models run across both nodes (TP=2)
+# Nodes required per model. Models that fit in a single DGX Spark's
+# ~120GB VRAM use 1 node; larger models that must be split across two
+# Sparks use 2 nodes.
 MODEL_NODES=(
-  2 2 2 2 2 2 2 2 2 2 2 2 2
+  1 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2
 )
 
 MODEL_NEEDS_TOKEN=(
-  false false false false false false false false false true true false true
+  false false false false false false false false false true true false true true true true
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
