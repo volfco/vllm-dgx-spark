@@ -10,8 +10,9 @@ set -euo pipefail
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Configuration
-IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}"
-RAY_VERSION="${RAY_VERSION:-2.52.1}"
+IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:26.03-py3}"
+RAY_VERSION="${RAY_VERSION:-2.54.0}"
+RAY_PORT="${RAY_PORT:-6385}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
 
@@ -183,8 +184,8 @@ log ""
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 log "Step 1/8: Testing connectivity to head"
-if ! nc -zv -w 3 "${HEAD_IP}" 6380 2>&1 | grep -q "succeeded"; then
-  error "Cannot reach Ray head at ${HEAD_IP}:6380. Check network connectivity and firewall."
+if ! nc -zv -w 3 "${HEAD_IP}" "${RAY_PORT}" 2>&1 | grep -q "succeeded"; then
+  error "Cannot reach Ray head at ${HEAD_IP}:${RAY_PORT}. Check network connectivity and firewall."
 fi
 log "  ✅ Head is reachable"
 
@@ -276,7 +277,7 @@ log "Step 6/8: Verifying container dependencies"
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${WORKER_NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.03-py3"
 fi
 log "  ✅ PyTorch CUDA available"
 
@@ -364,7 +365,7 @@ fi
 log "Step 8/8: Joining Ray cluster"
 docker exec "${WORKER_NAME}" bash -lc "
   ray stop --force 2>/dev/null || true
-  ray start --address=${HEAD_IP}:6380 --node-ip-address=${WORKER_IP}
+  ray start --address=${HEAD_IP}:${RAY_PORT} --node-ip-address=${WORKER_IP}
 " >/dev/null
 
 log "  Worker started, waiting for cluster registration..."
@@ -378,7 +379,7 @@ for i in {1..60}; do
   ELAPSED=$((CURRENT_TIME - START_TIME))
 
   # Check if ray status shows more than 1 node (head + this worker)
-  NODE_COUNT=$(docker exec "${WORKER_NAME}" bash -lc "ray status --address=${HEAD_IP}:6380 2>/dev/null | grep -E '^ [0-9]+ node_' | wc -l" 2>/dev/null || echo "0")
+  NODE_COUNT=$(docker exec "${WORKER_NAME}" bash -lc "ray status --address=${HEAD_IP}:${RAY_PORT} 2>/dev/null | grep -E '^ [0-9]+ node_' | wc -l" 2>/dev/null || echo "0")
   if [ "${NODE_COUNT}" -ge 2 ]; then
     echo ""
     log "  ✅ Worker connected to cluster (${ELAPSED}s) - ${NODE_COUNT} nodes active"
@@ -398,7 +399,7 @@ if [ "${CONNECTED}" != "true" ]; then
   echo ""
   log "  ⚠️  Connection check timed out after 60s"
   log "     The worker may still be connected - verify from head node:"
-  log "     docker exec ray-head ray status --address=127.0.0.1:6380"
+  log "     docker exec ray-head ray status --address=127.0.0.1:${RAY_PORT}"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -409,7 +410,7 @@ echo "✅ Worker ${WORKER_NAME} is ready!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "🔍 Verify from head node:"
-echo "  docker exec ray-head ray status --address=127.0.0.1:6380"
+echo "  docker exec ray-head ray status --address=127.0.0.1:${RAY_PORT}"
 echo ""
 echo "📊 Expected output should show multiple 'Healthy' nodes"
 echo ""

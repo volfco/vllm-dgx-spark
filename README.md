@@ -91,7 +91,7 @@ You should see your GPU listed with driver version.
 Docker must be installed with NVIDIA Container Runtime configured:
 ```bash
 # Verify Docker works with GPU access
-docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
 ```
 If this fails, install/configure the NVIDIA Container Toolkit.
 
@@ -307,7 +307,7 @@ TRUST_REMOTE_CODE="false"          # For custom model code
 # │ Optional                                                        │
 # └─────────────────────────────────────────────────────────────────┘
 HF_TOKEN="hf_xxx"                  # For gated models (Llama, etc.)
-VLLM_IMAGE="nvcr.io/nvidia/vllm:25.11-py3"  # Docker image
+VLLM_IMAGE="nvcr.io/nvidia/vllm:26.03-py3"  # Docker image
 ```
 
 ### Single-Node vs Multi-Node Mode Detection
@@ -502,7 +502,7 @@ ssh-copy-id <username>@<worker-ip>
 ssh <username>@<worker-ip> "docker logs ray-worker"
 
 # Check Ray cluster status
-docker exec ray-head ray status --address=127.0.0.1:6380
+docker exec ray-head ray status --address=127.0.0.1:6385
 ```
 
 ### Low Throughput (Using Ethernet instead of InfiniBand)
@@ -553,7 +553,7 @@ export MAX_MODEL_LEN=4096
 docker exec ray-head tail -100 /var/log/vllm.log
 
 # Check Ray status
-docker exec ray-head ray status --address=127.0.0.1:6380
+docker exec ray-head ray status --address=127.0.0.1:6385
 
 # Common issues:
 # - Insufficient GPUs for tensor-parallel-size

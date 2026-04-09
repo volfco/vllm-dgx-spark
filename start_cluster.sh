@@ -18,11 +18,11 @@ elif [ -f "${SCRIPT_DIR}/config.env" ]; then
 fi
 
 # Configuration (can be overridden by config.env or environment)
-IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}}"
+IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:26.03-py3}}"
 NAME="${HEAD_CONTAINER_NAME:-${NAME:-ray-head}}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"
-RAY_VERSION="${RAY_VERSION:-2.52.1}"
+RAY_VERSION="${RAY_VERSION:-2.54.0}"
 
 # Worker node configuration (for orchestrated setup)
 # WORKER_HOST: Ethernet IP for SSH access (e.g., 192.168.7.111)
@@ -59,7 +59,7 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 # Ports
 VLLM_PORT="${VLLM_PORT:-8000}"
 RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
-RAY_PORT="${RAY_PORT:-6380}"
+RAY_PORT="${RAY_PORT:-6385}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Detect Single-Node Mode Early
@@ -311,7 +311,7 @@ fi
 # Check 4: NVIDIA GPU access
 echo ""
 echo "Checking NVIDIA GPU access..."
-if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+if docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
   echo "  ✅ NVIDIA GPU access via Docker is working"
 else
   echo "  ❌ Cannot access NVIDIA GPUs via Docker"
@@ -515,7 +515,7 @@ ENV_ARGS=(
   -e NVIDIA_DRIVER_CAPABILITIES=all
   # Ray settings
   -e RAY_memory_usage_threshold=0.998
-  -e RAY_GCS_SERVER_PORT=6380
+  -e RAY_GCS_SERVER_PORT="${RAY_PORT}"
   # vLLM timeout settings (large models like 70B+ can take 20+ minutes to load)
   -e VLLM_RPC_TIMEOUT="${VLLM_RPC_TIMEOUT:-1800}"
   # HuggingFace cache
@@ -606,7 +606,7 @@ log "Step 5/${TOTAL_STEPS}: Verifying container dependencies"
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.03-py3"
 fi
 log "  ✅ PyTorch CUDA available"
 
@@ -772,7 +772,7 @@ if [ -n "${WORKER_HOST}" ]; then
 
   # Build environment variables to pass to worker
   # Worker needs HEAD_IP, MODEL, HF_TOKEN, and HF_CACHE
-  WORKER_ENV="HEAD_IP=${HEAD_IP} MODEL=${MODEL} HF_CACHE=${WORKER_HF_CACHE} RAY_VERSION=${RAY_VERSION} SKIP_MODEL_DOWNLOAD=1"
+  WORKER_ENV="HEAD_IP=${HEAD_IP} MODEL=${MODEL} HF_CACHE=${WORKER_HF_CACHE} RAY_VERSION=${RAY_VERSION} RAY_PORT=${RAY_PORT} SKIP_MODEL_DOWNLOAD=1"
   if [ -n "${HF_TOKEN}" ]; then
     WORKER_ENV="${WORKER_ENV} HF_TOKEN=${HF_TOKEN}"
   fi

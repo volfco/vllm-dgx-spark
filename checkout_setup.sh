@@ -28,10 +28,21 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load configuration (config.local.env overrides config.env) so we pick up RAY_PORT etc.
+if [ -f "${SCRIPT_DIR}/config.local.env" ]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/config.local.env"
+elif [ -f "${SCRIPT_DIR}/config.env" ]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/config.env"
+fi
+
 CONTAINER="${CONTAINER:-ray-head}"
 WORKER_HOST="${WORKER_HOST:-${SECOND_DGX_HOST:-}}"
 WORKER_USER="${WORKER_USER:-$(whoami)}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RAY_PORT="${RAY_PORT:-6385}"
 
 # Counters
 ISSUES_FOUND=0
@@ -440,7 +451,7 @@ run_full_diagnostic() {
   # 4. Ray Cluster
   print_section "4. Ray Cluster Status"
   if has_container; then
-    log_cmd "Ray Status" "docker exec $CONTAINER bash -c 'ray status --address=127.0.0.1:6380 2>/dev/null || ray status'"
+    log_cmd "Ray Status" "docker exec $CONTAINER bash -c 'ray status --address=127.0.0.1:${RAY_PORT} 2>/dev/null || ray status'"
   fi
 
   # 5. Network Configuration
@@ -488,7 +499,7 @@ run_full_diagnostic() {
       echo "Remote GPUs:   $(ssh ${WORKER_USER}@${WORKER_HOST} 'nvidia-smi -L 2>/dev/null | wc -l' 2>/dev/null || echo 'unknown')"
     fi
     if has_container; then
-      echo "Ray Nodes:     $(docker exec $CONTAINER bash -c 'ray status --address=127.0.0.1:6380 2>/dev/null | grep -c node_ || echo 0' 2>/dev/null)"
+      echo "Ray Nodes:     $(docker exec $CONTAINER bash -c "ray status --address=127.0.0.1:${RAY_PORT} 2>/dev/null | grep -c node_ || echo 0" 2>/dev/null)"
     fi
     echo "IB Ports Up:   $(ibstat 2>/dev/null | grep -c 'State: Active' || echo '0')"
     echo ""
@@ -536,7 +547,7 @@ quick_check() {
   # Ray Check
   print_section "Ray Cluster"
   if has_container; then
-    local ray_nodes=$(docker exec "$CONTAINER" bash -c 'ray status --address=127.0.0.1:6380 2>/dev/null | grep -c node_' 2>/dev/null || echo "0")
+    local ray_nodes=$(docker exec "$CONTAINER" bash -c "ray status --address=127.0.0.1:${RAY_PORT} 2>/dev/null | grep -c node_" 2>/dev/null || echo "0")
     if [ "$ray_nodes" -gt 0 ]; then
       print_ok "$ray_nodes Ray node(s) connected"
     else
