@@ -182,6 +182,8 @@ That's it! **No InfiniBand, SSH setup, or worker configuration needed.** The scr
 
 - InfiniBand detection and configuration is skipped
 - NCCL uses NVLink/PCIe for GPU-to-GPU communication
+- Network interfaces default to `lo` (loopback)
+- The `/dev/infiniband` device is not mounted in the container
 - The setup is simpler and faster
 
 #### Option B: Dual-Node Cluster (For Larger Models)
@@ -211,9 +213,9 @@ cp config.env config.local.env
 vim config.local.env
 
 # Set at minimum:
-# WORKER_HOST="<worker-ethernet-ip>"   # For SSH
-# WORKER_IB_IP="<worker-infiniband-ip>" # For NCCL
-# WORKER_USER="<ssh-username>"
+WORKER_HOST="<worker-ethernet-ip>"   # Ethernet IP for SSH (required for multi-node)
+WORKER_IB_IP="<worker-infiniband-ip>" # InfiniBand IP for NCCL communication (recommended)
+WORKER_USER="<ssh-username>"
 ```
 
 **Start the Cluster:**
@@ -280,14 +282,17 @@ curl http://localhost:8000/v1/chat/completions \
 Key settings in `config.env` or `config.local.env`:
 
 ```bash
-# ┌─────────────────────────────────────────────────────────────────┐
-# │ Multi-Node Settings (Optional - skip for single-node)          │
-# └─────────────────────────────────────────────────────────────────┘
-# If these are not set and TENSOR_PARALLEL <= local GPU count,
-# the script runs in single-node mode (no InfiniBand required)
-WORKER_HOST="<worker-ethernet-ip>" # Worker Ethernet IP for SSH (optional)
-WORKER_IB_IP="<worker-ib-ip>"      # Worker InfiniBand IP for NCCL (optional)
-WORKER_USER="<username>"           # SSH username for workers
+# ┌────────────────────────────────────────────────────────────────────────────────┐
+# │ Multi-Node Settings                                                            │
+# └────────────────────────────────────────────────────────────────────────────────┘
+# Required for multi-node mode. If WORKER_HOST is not set and TENSOR_PARALLEL 
+# <= local GPU count, the script runs automatically in single-node mode.
+#
+# WORKER_HOST: Ethernet IP for SSH communication with worker
+# WORKER_IB_IP: InfiniBand IP for NCCL communication (recommended for multi-node)
+WORKER_HOST="<worker-ethernet-ip>"  # Worker Ethernet IP for SSH (required for multi-node)
+WORKER_IB_IP="<worker-ib-ip>"       # Worker InfiniBand IP for NCCL (recommended)
+WORKER_USER="<username>"            # SSH username for workers (optional, defaults to current user)
 
 # ┌─────────────────────────────────────────────────────────────────┐
 # │ Model Settings                                                  │
@@ -320,6 +325,8 @@ The script automatically determines which mode to use:
 |-----------|------|------------|
 | `WORKER_HOST` not set AND `TENSOR_PARALLEL` ≤ local GPUs | Single-node | Not required |
 | `WORKER_HOST` set OR `TENSOR_PARALLEL` > local GPUs | Multi-node | Required |
+
+> **For multi-node mode**: Set both `WORKER_HOST` (for SSH) and `WORKER_IB_IP` (for NCCL over InfiniBand). In multi-node mode, SSH and InfiniBand networking are **required** for the script to function.
 
 In **single-node mode**:
 - InfiniBand detection and configuration is skipped
