@@ -521,8 +521,8 @@ ENV_ARGS=(
   -e RAY_GCS_SERVER_PORT="${RAY_PORT}"
   # vLLM timeout settings (large models like 70B+ can take 20+ minutes to load)
   -e VLLM_RPC_TIMEOUT="${VLLM_RPC_TIMEOUT:-1800}"
-  # HuggingFace cache
-  -e HF_HOME=/root/.cache/huggingface
+  # HuggingFace cache — use the same path inside the container as on the host
+  -e HF_HOME="${HF_CACHE}"
 )
 
 if [ "${SINGLE_NODE_MODE}" = "true" ]; then
@@ -553,7 +553,6 @@ if [ -n "${HF_TOKEN}" ]; then
 fi
 
 # Build Docker run command
-# HF cache is mounted to /root/.cache/huggingface
 DOCKER_ARGS=(
   --restart unless-stopped
   --name "${NAME}"
@@ -563,7 +562,7 @@ DOCKER_ARGS=(
   --ulimit memlock=-1
   --ulimit stack=67108864
   --cap-add=SYS_NICE
-  -v "${HF_CACHE}:/root/.cache/huggingface"
+  -v "${HF_CACHE}:${HF_CACHE}"
 )
 
 # Add InfiniBand device only in multi-node mode (and only if device exists)
@@ -628,28 +627,12 @@ log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 6/${TOTAL_STEPS}: Pre-downloading model weights"
+log "Step 6/${TOTAL_STEPS}: Verifying model exists and fits in GPU memory"
 log "  Model: ${MODEL}"
-log "  This may take a while for large models on first download..."
 
-# Build HF token arg if provided
-HF_TOKEN_ARG=""
-if [ -n "${HF_TOKEN}" ]; then
-  HF_TOKEN_ARG="--token ${HF_TOKEN}"
-fi
-
-# Download model with verification
-if ! docker exec "${NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
-  echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-  hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*'
-"; then
-  error "Failed to download model ${MODEL}"
-fi
-
-# Verify model was downloaded by checking for config.json
-if ! docker exec "${NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
+# Verify model exists locally (no download)
+MODEL_PATH=$(docker exec "${NAME}" bash -lc "
+  export HF_HOME=${HF_CACHE}
   python3 -c \"
 from huggingface_hub import snapshot_download
 import os
@@ -657,13 +640,72 @@ path = snapshot_download('${MODEL}', local_files_only=True)
 config_path = os.path.join(path, 'config.json')
 if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
-print(f'  ✅ Model verified at: {path}')
+print(path)
 \"
-"; then
-  error "Model verification failed - config.json not found"
-fi
+" 2>/dev/null) || true
 
-log "  Model download complete and verified"
+if [ -z "${MODEL_PATH}" ]; then
+  error "Model ${MODEL} not found in local cache (${HF_CACHE}). Download it first with: huggingface-cli download ${MODEL}"
+fi
+log "  ✅ Model found at: ${MODEL_PATH}"
+
+# Check that the model fits in available GPU memory respecting GPU_MEMORY_UTIL
+log "  Checking GPU memory capacity..."
+MEMORY_CHECK=$(docker exec "${NAME}" bash -lc "
+  python3 -c \"
+import torch
+import os
+import glob
+
+# Get per-GPU memory in bytes
+gpu_mem = torch.cuda.get_device_properties(0).total_mem
+tp = ${TENSOR_PARALLEL}
+gpu_util = ${GPU_MEMORY_UTIL}
+usable_mem = gpu_mem * tp * gpu_util
+
+# Estimate model size from weight files on disk
+model_path = '${MODEL_PATH}'
+model_size = 0
+for pattern in ['*.safetensors', '*.bin']:
+    for f in glob.glob(os.path.join(model_path, pattern)):
+        model_size += os.path.getsize(f)
+
+# Format sizes for display
+def fmt(b):
+    return f'{b / (1024**3):.1f} GiB'
+
+per_gpu = fmt(gpu_mem)
+total_usable = fmt(usable_mem)
+model_fmt = fmt(model_size)
+
+if model_size == 0:
+    print(f'WARN|Could not determine model size (no .safetensors or .bin files found)')
+elif model_size > usable_mem:
+    print(f'FAIL|Model weights ({model_fmt}) exceed usable GPU memory ({total_usable} = {tp} GPUs x {per_gpu} x {gpu_util} util)')
+else:
+    print(f'OK|Model weights ({model_fmt}) fit in usable GPU memory ({total_usable} = {tp} GPUs x {per_gpu} x {gpu_util} util)')
+\"
+" 2>/dev/null) || true
+
+MEMORY_STATUS="${MEMORY_CHECK%%|*}"
+MEMORY_MSG="${MEMORY_CHECK#*|}"
+
+case "${MEMORY_STATUS}" in
+  OK)
+    log "  ✅ ${MEMORY_MSG}"
+    ;;
+  WARN)
+    log "  ⚠️  ${MEMORY_MSG}"
+    ;;
+  FAIL)
+    error "${MEMORY_MSG}"
+    ;;
+  *)
+    log "  ⚠️  Could not verify GPU memory capacity"
+    ;;
+esac
+
+log "  Model verification complete"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Worker orchestration steps (only if WORKER_HOST is set)
@@ -886,7 +928,7 @@ VLLM_ARGS="${VLLM_ARGS} --tensor-parallel-size ${TENSOR_PARALLEL}"
 VLLM_ARGS="${VLLM_ARGS} --max-model-len ${MAX_MODEL_LEN}"
 VLLM_ARGS="${VLLM_ARGS} --gpu-memory-utilization ${GPU_MEMORY_UTIL}"
 VLLM_ARGS="${VLLM_ARGS} --swap-space ${SWAP_SPACE}"
-VLLM_ARGS="${VLLM_ARGS} --download-dir /root/.cache/huggingface"
+VLLM_ARGS="${VLLM_ARGS} --download-dir ${HF_CACHE}"
 VLLM_ARGS="${VLLM_ARGS} --load-format ${LOAD_FORMAT}"
 
 # Add optional flags
@@ -903,7 +945,7 @@ fi
 # Start vLLM in background using nohup
 # Note: We do NOT set HF_HUB_OFFLINE=1 here because workers need to resolve the model name
 docker exec "${NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
+  export HF_HOME=${HF_CACHE}
   export RAY_ADDRESS=127.0.0.1:${RAY_PORT}
   export PYTHONUNBUFFERED=1
   export VLLM_LOGGING_LEVEL=INFO

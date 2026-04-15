@@ -229,7 +229,7 @@ docker run -d \
   --ulimit stack=67108864 \
   --cap-add=SYS_NICE \
   --device=/dev/infiniband \
-  -v "${HF_CACHE}:/root/.cache/huggingface" \
+  -v "${HF_CACHE}:${HF_CACHE}" \
   -e VLLM_HOST_IP="${WORKER_IP}" \
   -e GLOO_SOCKET_IFNAME="${GLOO_IF}" \
   -e TP_SOCKET_IFNAME="${TP_IF}" \
@@ -245,7 +245,7 @@ docker run -d \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e RAY_memory_usage_threshold=0.995 \
   -e VLLM_RPC_TIMEOUT="${VLLM_RPC_TIMEOUT:-1800}" \
-  -e HF_HOME=/root/.cache/huggingface \
+  -e HF_HOME="${HF_CACHE}" \
   ${HF_TOKEN_ENV} \
   "${IMAGE}" sleep infinity
 
@@ -303,7 +303,7 @@ if [ -n "${SKIP_MODEL_DOWNLOAD}" ]; then
 
   # Verify model was synced by checking for config.json
   if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
+    export HF_HOME=${HF_CACHE}
     python3 -c \"
 from huggingface_hub import snapshot_download
 import os
@@ -334,7 +334,7 @@ else
 
   # Download model with verification (using 'hf download' instead of deprecated 'huggingface-cli download')
   if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
+    export HF_HOME=${HF_CACHE}
     echo '  Downloading model files (excluding original/* and metal/* to save space)...'
     hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
   "; then
@@ -343,7 +343,7 @@ else
 
   # Verify model was downloaded by checking for config.json
   if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
+    export HF_HOME=${HF_CACHE}
     python3 -c \"
 from huggingface_hub import snapshot_download
 import os
