@@ -328,6 +328,7 @@ LIST_ONLY=false
 DOWNLOAD_ONLY=false
 SKIP_DOWNLOAD=false
 MODEL_NUMBER=""
+DOWNLOAD_ALL_MODELS=false
 
 usage() {
   cat << EOF
@@ -348,6 +349,7 @@ Examples:
   $0 --list           # List all available models
   $0 -s 3             # Update config for model #3 without restarting
   $0 -d 5             # Download model #5 only (no restart)
+  $0 all              # Download all models (batch download mode)
 
 Environment:
   WORKER_HOST         Worker node hostname/IP for rsync
@@ -384,7 +386,12 @@ while [[ $# -gt 0 ]]; do
       MODEL_NUMBER="$1"
       shift
       ;;
-    *)
+  all)
+      DOWNLOAD_ALL_MODELS=true
+      MODEL_NUMBER="all"
+      shift
+      ;;
+  *)
       echo "Unknown option: $1"
       usage
       ;;
@@ -453,6 +460,37 @@ echo ""
 
 # Exit if list only
 if [ "${LIST_ONLY}" = "true" ]; then
+  exit 0
+fi
+
+# Batch download mode
+if [ "${DOWNLOAD_ALL_MODELS}" = "true" ]; then
+  echo "Downloading all models (this may take a while)..."
+  echo ""
+  for i in "${!MODELS[@]}"; do
+    IDX=$((i + 1))
+    MODEL="${MODELS[$i]}"
+    MODEL_NAME="${MODEL_NAMES[$i]}"
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Downloading [${IDX}/${#MODELS[@]}]: ${MODEL_NAME}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Check if already downloaded
+    if is_model_downloaded "${MODEL}"; then
+      log "  Model already cached, skipping..."
+      continue
+    fi
+    
+    # Download model
+    if download_model "${MODEL}"; then
+      log "  ✅ Downloaded successfully"
+    else
+      log "  ⚠️  Download failed, but continuing..."
+    fi
+    echo ""
+  done
+  echo "Batch download complete!"
   exit 0
 fi
 
