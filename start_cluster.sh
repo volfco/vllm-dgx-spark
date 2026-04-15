@@ -642,7 +642,7 @@ fi
 if ! docker exec "${NAME}" bash -lc "
   export HF_HOME=/root/.cache/huggingface
   echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-  hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
+  hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*'
 "; then
   error "Failed to download model ${MODEL}"
 fi
