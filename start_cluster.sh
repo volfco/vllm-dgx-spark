@@ -10,8 +10,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load configuration (config.local.env overrides config.env)
-if [ -f "${SCRIPT_DIR}/config.local.env" ]; then
+# Load configuration (env file argument overrides config.local.env overrides config.env)
+ENV_FILE="${1:-}"
+if [ -n "${ENV_FILE}" ] && [ -f "${ENV_FILE}" ]; then
+  source "${ENV_FILE}"
+elif [ -f "${SCRIPT_DIR}/config.local.env" ]; then
   source "${SCRIPT_DIR}/config.local.env"
 elif [ -f "${SCRIPT_DIR}/config.env" ]; then
   source "${SCRIPT_DIR}/config.env"
